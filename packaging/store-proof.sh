@@ -22,6 +22,8 @@ ENABLED_PATH="kingletas_catalog_batch/general/enabled"
 MEASURE="${STORE_PROOF_STORE}/local.d/store-proof-catalog-batch.php"
 FLAG="${STORE_PROOF_STORE}/local.d/store-proof-catalog-batch-flag.php"
 AREAS="${STORE_PROOF_STORE}/local.d/store-proof-catalog-batch-areas.php"
+SEED="${STORE_PROOF_STORE}/local.d/store-proof-catalog-batch-seed.php"
+seeded=0
 failures=0
 
 step() { printf '    %s\n' "$*"; }
@@ -42,16 +44,123 @@ field() {
 
 cleanup() {
 	$STORE_PROOF_MAGENTO config:set "$ENABLED_PATH" 0 >/dev/null 2>&1 || true
+	if [ "$seeded" = "1" ]; then
+		$STORE_PROOF_PHP /app/local.d/store-proof-catalog-batch-seed.php remove >/dev/null 2>&1 || true
+	fi
 	$STORE_PROOF_MAGENTO cache:flush >/dev/null 2>&1 || true
-	rm -f "$MEASURE" "$FLAG" "$AREAS"
+	rm -f "$MEASURE" "$FLAG" "$AREAS" "$SEED"
 }
 trap cleanup EXIT
 
 # --- the store has to be able to show the difference -------------------------
 
 # A store with one configurable cannot demonstrate batching: one product is one
-# query either way. Fail by name rather than reporting a meaningless pass.
+# query either way. A store with fewer than three is given three of its own,
+# removed again at the end, and still fails by name if they could not be made.
+mkdir -p "${STORE_PROOF_STORE}/local.d"
+cat > "$SEED" <<-'PHP'
+	<?php
+	declare(strict_types=1);
+
+	/**
+	 * Adds, or with "remove" takes away, three configurable products on a throwaway attribute.
+	 */
+
+	require '/app/app/bootstrap.php';
+
+	use Magento\Catalog\Api\ProductRepositoryInterface;
+	use Magento\Catalog\Model\Product;
+	use Magento\Framework\App\Bootstrap;
+
+	const CODE = 'store_proof_batch';
+	const SKU = 'store-proof-batch';
+
+	$objectManager = Bootstrap::create(BP, $_SERVER)->getObjectManager();
+	$objectManager->get(\Magento\Framework\App\State::class)->setAreaCode('adminhtml');
+	$objectManager->get(\Magento\Framework\Registry::class)->register('isSecureArea', true);
+	$repository = $objectManager->get(ProductRepositoryInterface::class);
+	$setup = $objectManager->get(\Magento\Eav\Setup\EavSetupFactory::class)->create([
+	    'setup' => $objectManager->get(\Magento\Framework\Setup\ModuleDataSetupInterface::class),
+	]);
+
+	if (($argv[1] ?? '') === 'remove') {
+	    foreach ([1, 2, 3] as $n) {
+	        foreach (["-$n", "-$n-0", "-$n-1"] as $suffix) {
+	            try {
+	                $repository->deleteById(SKU . $suffix);
+	            } catch (\Throwable) {
+	                // Already gone.
+	            }
+	        }
+	    }
+	    $setup->removeAttribute(Product::ENTITY, CODE);
+	    echo "removed\n";
+	    exit(0);
+	}
+
+	$setup->addAttribute(Product::ENTITY, CODE, [
+	    'type' => 'int',
+	    'input' => 'select',
+	    'label' => 'Store proof batch',
+	    'global' => \Magento\Eav\Model\Entity\Attribute\ScopedAttributeInterface::SCOPE_GLOBAL,
+	    'user_defined' => true,
+	    'required' => false,
+	    'group' => 'General',
+	    'option' => ['values' => ['first', 'second']],
+	]);
+	$attribute = $objectManager->create(\Magento\Eav\Model\Config::class)->getAttribute(Product::ENTITY, CODE);
+	$options = array_values($attribute->getSource()->getAllOptions(false));
+	$setId = (int) $objectManager->get(Product::class)->getDefaultAttributeSetId();
+	$factory = $objectManager->get(\Magento\ConfigurableProduct\Helper\Product\Options\Factory::class);
+
+	foreach ([1, 2, 3] as $n) {
+	    $children = [];
+	    $values = [];
+	    foreach ($options as $i => $option) {
+	        $child = $objectManager->create(Product::class)
+	            ->setTypeId('simple')->setAttributeSetId($setId)->setWebsiteIds([1])
+	            ->setName("Store proof $n $i")->setSku(SKU . "-$n-$i")->setPrice(10)
+	            ->setVisibility(1)->setStatus(1)
+	            ->setStockData(['use_config_manage_stock' => 1, 'qty' => 100, 'is_in_stock' => 1]);
+	        $child->setData(CODE, $option['value']);
+	        $children[] = (int) $repository->save($child)->getId();
+	        $values[] = ['label' => $option['label'], 'attribute_id' => $attribute->getId(), 'value_index' => $option['value']];
+	    }
+	    $parent = $objectManager->create(Product::class)
+	        ->setTypeId('configurable')->setAttributeSetId($setId)->setWebsiteIds([1])
+	        ->setName("Store proof configurable $n")->setSku(SKU . "-$n")
+	        ->setVisibility(4)->setStatus(1)
+	        ->setStockData(['use_config_manage_stock' => 1, 'is_in_stock' => 1]);
+	    $extension = $parent->getExtensionAttributes();
+	    $extension->setConfigurableProductOptions($factory->create([[
+	        'attribute_id' => $attribute->getId(),
+	        'code' => CODE,
+	        'label' => 'Store proof batch',
+	        'position' => 0,
+	        'values' => $values,
+	    ]]));
+	    $extension->setConfigurableProductLinks($children);
+	    $parent->setExtensionAttributes($extension);
+	    $repository->save($parent);
+	}
+
+	echo "seeded=3\n";
+PHP
+
 configurables="$(value "SELECT COUNT(*) FROM catalog_product_entity WHERE type_id = 'configurable';")"
+if [ "${configurables:-0}" -lt 3 ]; then
+	step "the store has ${configurables:-0} configurable products, so the proof adds three of its own"
+	seeded=1
+	seed_out="$($STORE_PROOF_PHP /app/local.d/store-proof-catalog-batch-seed.php 2>&1 | tail -3)"
+	grep -q '^seeded=3$' <<< "$seed_out" || { echo "    could not add configurable products: ${seed_out}" >&2; exit 1; }
+	# The storefront shows only what the stock index lists, and saving a product
+	# does not index a configurable's stock, so the proof does what cron would.
+	$STORE_PROOF_MAGENTO indexer:reindex cataloginventory_stock >/dev/null
+	if $STORE_PROOF_MAGENTO indexer:info | grep -q '^inventory '; then
+		$STORE_PROOF_MAGENTO indexer:reindex inventory >/dev/null
+	fi
+	configurables="$(value "SELECT COUNT(*) FROM catalog_product_entity WHERE type_id = 'configurable';")"
+fi
 if [ "${configurables:-0}" -lt 3 ]; then
 	echo "    this proof needs at least 3 configurable products and this store has ${configurables:-0}" >&2
 	exit 1

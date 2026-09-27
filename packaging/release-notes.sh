@@ -24,10 +24,13 @@ CHANGELOG="${CHANGELOG:-$HERE/CHANGELOG.md}"
 [ -n "$VERSION" ] || { echo "usage: release-notes.sh VERSION" >&2; exit 2; }
 
 # Everything between this version's heading and the next one at the same level.
-# The heading is "## 0.1.0" or "## 0.1.0 — 2026-09-07"; the fields are compared
-# as strings so a dot in the version cannot match any other character.
+# The heading is "## 0.1.0", "## 0.1.0 - 2026-09-07", or Keep a Changelog's
+# "## [0.1.0]: 2026-09-07"; brackets and the colon are stripped before comparing.
+# The compare is a string one, so a dot in the version cannot stand in for any
+# other character.
 notes="$(awk -v version="$VERSION" '
-  !found && $1 == "##" && $2 == version { found = 1; next }
+  function bare(f) { gsub(/\[/, "", f); gsub(/\]/, "", f); gsub(/:/, "", f); return f }
+  !found && $1 == "##" && bare($2) == version { found = 1; next }
   found && $1 == "##" { exit }
   found { print }
 ' "$CHANGELOG")"
@@ -42,13 +45,15 @@ fi
 
 # The changelog wraps its lines, and a release page renders every newline as a
 # break, so each paragraph and list item is joined back onto one line. Headings,
-# table rows and fenced code are left exactly as written.
+# table rows, fenced code and link definitions ("[1.0.0]: https://...") are left
+# exactly as written: two definitions joined onto one line define neither.
 printf '%s\n' "$notes" | awk '
   function flush() { if (buf != "") print buf; buf = "" }
   /^[[:space:]]*```/ { flush(); fenced = !fenced; print; next }
   fenced { print; next }
   /^[[:space:]]*$/ { flush(); print; next }
   /^[[:space:]]*\|/ || /^#+ / { flush(); print; next }
+  /^[[:space:]]*\[[^]]+\]:[[:space:]]/ { flush(); print; next }
   /^[[:space:]]*([-*+>] |[0-9]+\. )/ { flush(); buf = $0; next }
   {
     line = $0

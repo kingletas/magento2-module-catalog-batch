@@ -2,7 +2,11 @@
 
 All notable changes to this module are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 1.1.0 - 2026-09-26
+
+Tooling only. The store proof adds three configurable products of its own to a store that has fewer, indexes their stock so the storefront lists them, and removes them afterwards, rather than refusing to run. Nothing about how the module behaves changed.
+
+Requires PHP 8.4 or later, like the rest of the public modules. PHP 8.3 is two releases behind the current 8.5.
 
 ### Fixed
 

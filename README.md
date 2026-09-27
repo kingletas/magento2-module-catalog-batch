@@ -110,7 +110,7 @@ bin/magento cache:flush
 
 ## Requirements
 
-PHP 8.3 or 8.4, and Magento Open Source or Adobe Commerce 2.4.8 or later.
+PHP 8.4 or later, and Magento Open Source or Adobe Commerce 2.4.8 or later.
 
 ## Working on it
 

@@ -2,9 +2,8 @@
 <ruleset name="Kingletas_CatalogBatch">
     <description>
         Magento's own coding standard, plus a floor on the PHP version the
-        manifest claims to support: 8.3, because the code uses typed class
-        constants. PHPCompatibility predates PHP 8.1, so the CI syntax check on
-        8.3 and 8.4 is what enforces the floor.
+        manifest claims to support: 8.4. PHPCompatibility predates PHP 8.1, so
+        the CI syntax check on 8.4 is what enforces the floor.
     </description>
 
     <file>Model</file>
@@ -33,7 +32,7 @@
     <rule ref="PHPCompatibility">
         <include-pattern>*\.php$</include-pattern>
     </rule>
-    <config name="testVersion" value="8.3-"/>
+    <config name="testVersion" value="8.4-"/>
 
     <!-- Exclusions, each with its reason. -->
 
